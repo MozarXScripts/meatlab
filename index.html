@@ -386,7 +386,7 @@ uniform mat4 uModel, uVP; uniform mat4 uBones[12]; uniform int uSkin; uniform fl
 out vec3 vWPos, vNor, vCol, vLPos; out float vBB, vHW;
 #ifdef CUT
 uniform vec4 uCP[12]; uniform vec4 uClipL; uniform float uClipLOn;
-flat out vec4 vPA, vPB; flat out vec3 vCamB, vNA, vNB; flat out float vTyp;
+flat out vec4 vPA, vPB; flat out vec3 vCamB, vNA, vNB; flat out float vTyp; flat out float vDB;
 #endif
 void main(){ mat4 m=uModel; vBB=0.; vHW=0.;
 #ifdef CUT
@@ -399,7 +399,7 @@ void main(){ mat4 m=uModel; vBB=0.; vHW=0.;
  }
  vec4 w=m*vec4(aPos,1.); vWPos=w.xyz; vLPos=aPos; vNor=mat3(m)*aNor; vCol=aCol; gl_Position=uVP*w;
 #ifdef CUT
- mat3 R=mat3(m); vCamB=transpose(R)*(uCamPos-m[3].xyz); vNA=normalize(R*vPA.xyz+1e-6); vNB=normalize(R*vPB.xyz+1e-6); vTyp=aCol.r>5.?floor(aCol.r-9.5):0.;
+ mat3 R=mat3(m); vCamB=transpose(R)*(uCamPos-m[3].xyz); vNA=normalize(R*vPA.xyz+1e-6); vNB=normalize(R*vPB.xyz+1e-6); vTyp=aCol.r>5.?floor(aCol.r-9.5):0.; vDB=uSkin==1?(aBw<0.5?float(int(aBi.x+0.5)&31):float(int(aBi.y+0.5)&31)):-1.;
 #endif
 }`;
 const FS_MAIN = `#version 300 es
@@ -410,7 +410,7 @@ uniform int uTex; uniform sampler2D uTexA; uniform vec4 uW[10]; uniform vec4 uW2
 uniform vec4 uDr[32]; uniform vec4 uDr2[32]; uniform int uDN;
 ${GLSL_COMMON}
 #ifdef CUT
-flat in vec4 vPA, vPB; flat in vec3 vCamB, vNA, vNB; flat in float vTyp; uniform mat4 uVP;
+flat in vec4 vPA, vPB; flat in vec3 vCamB, vNA, vNB; flat in float vTyp; flat in float vDB; uniform mat4 uVP; uniform vec4 uCR[8]; uniform vec4 uCRB[8]; uniform int uCRN;
 #endif
 out vec4 o;
 vec3 innerCol(float t, vec3 p){
@@ -424,16 +424,21 @@ void main(){
  gl_FragDepth=gl_FragCoord.z;
  float dA=dot(vLPos,vPA.xyz)-vPA.w, dB=dot(vLPos,vPB.xyz)-vPB.w;
  if(dA>0.||dB>0.) discard;
+ if(gl_FrontFacing){ for(int i=0;i<8;i++){ if(i>=uCRN) break; if(abs(vDB-uCRB[i].x)<.5||abs(vDB-uCRB[i].y)<.5){ if(distance(vLPos,uCR[i].xyz)<uCR[i].w) discard; } } }
  if(!gl_FrontFacing){
-  vec3 rd=normalize(vLPos-vCamB); float tE=-1.; vec3 cn=vec3(0.,1.,0.);
+  vec3 rd=normalize(vLPos-vCamB); float tE=-1.; vec3 cn=vec3(0.,1.,0.); float vTy=vTyp;
   float sA=dot(vCamB,vPA.xyz)-vPA.w; if(sA>0.){ float dn=dot(rd,vPA.xyz); if(dn<-1e-5){ float t=-sA/dn; if(t>tE){ tE=t; cn=vNA; } } }
   float sB=dot(vCamB,vPB.xyz)-vPB.w; if(sB>0.){ float dn=dot(rd,vPB.xyz); if(dn<-1e-5){ float t=-sB/dn; if(t>tE){ tE=t; cn=vNB; } } }
+  float tf=distance(vLPos,vCamB), tC=-1.;
+  for(int i=0;i<8;i++){ if(i>=uCRN) break; if(abs(vDB-uCRB[i].x)<.5||abs(vDB-uCRB[i].y)<.5){ vec3 oc=vCamB-uCR[i].xyz; float bq=dot(oc,rd), hq=bq*bq-dot(oc,oc)+uCR[i].w*uCR[i].w; if(hq>0.){ float t=-bq-sqrt(hq); if(t>0.&&t<tf&&(tC<0.||t<tC)) tC=t; } } }
+  vec3 cwC=uCamPos+normalize(vWPos-uCamPos)*max(tC,0.); vec3 nC=normalize(cross(dFdx(cwC),dFdy(cwC))+1e-7); if(dot(nC,vWPos-uCamPos)>0.) nC=-nC;
+  if(tC>0.&&(tE<0.||tC<tE)){ tE=tC; cn=nC; vTy=0.; }
   vec3 cb, cw, cnw; float cs=0.55, cr=0.18;
-  if(tE>0.){ float tt=max(tE-vTyp*0.0022,0.); cb=vCamB+rd*tt; cw=uCamPos+normalize(vWPos-uCamPos)*tt; cnw=cn;
+  if(tE>0.){ float tt=max(tE-vTy*0.0022,0.); cb=vCamB+rd*tt; cw=uCamPos+normalize(vWPos-uCamPos)*tt; cnw=cn;
    vec4 cp=uVP*vec4(cw,1.); gl_FragDepth=clamp(cp.z/cp.w*0.5+0.5,0.,1.); }
   else { cb=vLPos; cw=vWPos; cnw=-normalize(vNor); }
-  vec3 cc=vTyp>0.5?innerCol(vTyp,cb):meatCol(cb);
-  if(vTyp>0.5&&vTyp<1.5){ cs=0.35; cr=0.45; }
+  vec3 cc=vTy>0.5?innerCol(vTy,cb):meatCol(cb);
+  if(vTy>0.5&&vTy<1.5){ cs=0.35; cr=0.45; }
   cc=mix(cc,vec3(0.16,0.004,0.004),smoothstep(0.55,0.8,vn(cb*45.))*0.45);
   float sh=shadowF(cw,cnw); vec3 c=lighting(cc,cw,cnw,cs,cr,sh);
   o=vec4(finish(c,cw),uAlpha); return;
@@ -712,6 +717,7 @@ class Renderer {
     if (this.cur === this.pCut) {
       if (mt.cp) gl.uniform4fv(u.uCP, mt.cp);
       if (mt.clipL) { gl.uniform1f(u.uClipLOn, 1); gl.uniform4fv(u.uClipL, mt.clipL); } else gl.uniform1f(u.uClipLOn, 0);
+      gl.uniform1i(u.uCRN, mt.crN || 0); if (mt.crN) { gl.uniform4fv(u.uCR, mt.cr); gl.uniform4fv(u.uCRB, mt.crB); }
     }
     if (mt.drN) { gl.uniform4fv(u.uDr, mt.dr); gl.uniform4fv(u.uDr2, mt.dr2); gl.uniform1i(u.uDN, mt.drN); } else gl.uniform1i(u.uDN, 0);
     gl.uniform3fv(u.uColor, mt.color || [1, 1, 1]); gl.uniform3fv(u.uEmis, mt.emis || [0, 0, 0]);
@@ -1775,6 +1781,7 @@ class NPC {
     this.bodyMat = { color: [1, 1, 1], spec: L.dummy ? 0.35 : 0.1, rough: L.dummy ? 0.45 : 0.85, detail: L.dummy ? 0 : 38, wounds: new Float32Array(40), wn: 0, wi: 0, bones: new Float32Array(NBONE * 16), bb: new Float32Array(NBONE), wounds2: new Float32Array(40) };
     this.segModels = this.segs.map(g => g.model); this._bm = m4();
     this.BP = BP; this.cpN = 0; this.bodyMat.cp = new Float32Array(48); this.spouts = [];
+    this.bodyMat.cr = new Float32Array(32); this.bodyMat.crB = new Float32Array(32); this.bodyMat.crN = 0; this.crI = 0; this.saws = []; this.trauma = 0;
     this.drips = []; this.bodyMat.dr = new Float32Array(128); this.bodyMat.dr2 = new Float32Array(128); this.bodyMat.drN = 0; this.drI = 0; this.dripAcc = 0;
     this.buildBuckets();
     // state
@@ -2039,6 +2046,7 @@ class NPC {
     // bleeding
     if (!this.dead || this.stT < 30) this.doBleeding(dt);
     this.stepDrips(dt);
+    this.stepSaws(dt);
     if (!this.dead) {
       this.blood -= this.bleed * dt * 0.55;
       this.bleed = Math.max(this.bleedFloor || 0, this.bleed - dt * 0.05);
@@ -2189,6 +2197,7 @@ class NPC {
     // wound
     if (!armorHit || kind !== 'bullet') this.addWound(seg, point, kind, dmg, dir);
     else { g.fx.sparks(point, dir.clone().scale(-1), 8); AU.clang(point, 0.5); }
+    if (opts.gouge && !armorHit) this.gouge(seg, point, opts.gouge, dir, opts.gb || 1);
     // physics impulse
     const a = this.P[sg.a], b = this.P[sg.b];
     let tt = 0.5; { const ab = _t1.subV(b, a), l2 = ab.len2(); if (l2 > 1e-6) tt = clamp(_t2.subV(point, a).dot(ab) / l2, 0, 1); }
@@ -2212,7 +2221,7 @@ class NPC {
         if (key && !(key === 'waist' && Math.random() > 0.55)) this.sever(key, dir);
       }
     }
-    if (opts.headPop && seg === 0 && !this.headGone) this.destroyHead(dir);
+    if (seg === 0 && !this.headGone && (kind === 'bullet' || kind === 'blunt' || kind === 'explosion')) { this.trauma += d * (kind === 'blunt' ? 1.6 : 1); if (this.trauma > 520 && (opts.headPop || kind === 'explosion' || this.trauma > 900)) this.destroyHead(dir); }
     // reactions
     if (!this.dead) {
       if (this.reg.head <= 0 || this.hp <= 0 || this.severed.neck || this.headGone) this.die(reg === 'head' ? 'head' : 'body', reg === 'head');
@@ -2256,11 +2265,11 @@ class NPC {
         W[i * 4 + 3] = Math.min(W[i * 4 + 3] + 0.004 * s, 0.032 * s);
         const op0 = W2[i * 4 + 3]; W2[i * 4 + 3] = Math.min(1.9, op0 + 0.32);
         if (op0 >= 1.15 && !this.peeled?.[i] && kind === 'slash') { (this.peeled = this.peeled || {})[i] = true; this.peel(point, dir || v3(0, 1, 0)); W2[i * 4 + 3] = 1.9; W[i * 4 + 3] = Math.min(W[i * 4 + 3] * 1.4, 0.04 * s); }
-        merged = true; break;
+        merged = true; this.lastWound = i; break;
       }
       if (!merged) {
         const i = bm.wn < 10 ? bm.wn++ : (bm.wi = (bm.wi + 1) % 10);
-        bm.wounds.set([A.x, A.y, A.z, r], i * 4); bm.wounds2.set([Bb.x, Bb.y, Bb.z, op], i * 4); if (this.peeled) this.peeled[i] = false;
+        bm.wounds.set([A.x, A.y, A.z, r], i * 4); bm.wounds2.set([Bb.x, Bb.y, Bb.z, op], i * 4); this.lastWound = i; if (this.peeled) this.peeled[i] = false;
       }
     }
     m.blood = Math.min(0.3, m.blood + (kind === 'blunt' ? 0.02 : 0.025));
@@ -2332,7 +2341,11 @@ class NPC {
     let depth = rad;
     if (crossing) { if (!info.leaf) return null; if (dB < 0) flip(); }
     else { if (dA > 0) flip(); const near = Math.min(-dA, -dB); if (near > rad * 0.72) return null; depth = rad - near; }
-    return this.chunkCut(seg, n, w, dir, depth) ? 'chunk' : null;
+    { const s = this.s, rg = this.segs[seg].reg; this.gouge(seg, pW, clamp(depth * 0.9, 0.02, 0.05) / s, dir, 1.3); this.g.stats.dismember++;
+      if (seg === 0) { this.g.feedMsg('Skull sliced open'); if (depth > 0.022 * s) this.die('skull', true); }
+      else if (seg === 1 || seg === 10) { this.g.feedMsg(depth > 0.08 * s ? 'Gutted' : 'Flesh carved off'); if (depth > 0.11 * s && !this.dead) this.die('gutted', false); else this.stagger(0.6); }
+      else { this.g.feedMsg('Chunk hacked off'); this.reg[rg] = Math.min(this.reg[rg], 5); if (depth > SEGS[seg].r * s * 0.8) this.broken[rg] = true; }
+      return 'chunk'; }
   }
   // duplicate the cut region: stump copy stays on the parent, the other copy follows the severed part
   splitMesh(info, n, w) {
@@ -2345,7 +2358,7 @@ class NPC {
       if ((wt < 0.999 && reg.has(b0)) || (wt > 0.001 && reg.has(b1))) { inReg[v] = 1; dup[v] = nv + extra++; }
     }
     const nd = new Float32Array((nv + extra) * st); nd.set(od);
-    const slot = (a, b, s) => a === 0 ? [s, b] : [a, s];
+    const slot = (a, b, s) => a === 0 ? [s, b] : b === 0 ? [a, s] : [a, b];
     for (let v = 0; v < nv; v++) {
       if (!inReg[v]) continue;
       const o = v * st, q = dup[v] * st, i0 = Math.round(od[o + 9]), i1 = Math.round(od[o + 10]);
@@ -2394,7 +2407,7 @@ class NPC {
         gb.i.push(map[v]);
       }
     }
-    for (let v = 0; v < nv; v++) { if (!inReg[v]) continue; const o = v * st, i0 = Math.round(d[o + 9]), i1 = Math.round(d[o + 10]); if ((i0 >> 5) === 0) d[o + 9] = (i0 & 31) + 32 * sl; else d[o + 10] = (i1 & 31) + 32 * sl; }
+    for (let v = 0; v < nv; v++) { if (!inReg[v]) continue; const o = v * st, i0 = Math.round(d[o + 9]), i1 = Math.round(d[o + 10]); if ((i0 >> 5) === 0) d[o + 9] = (i0 & 31) + 32 * sl; else if ((i1 >> 5) === 0) d[o + 10] = (i1 & 31) + 32 * sl; }
     this.g.R.reupload(m);
     const g = this.g, fx = g.fx, nl = m4dir(inv, n.x, n.y, n.z, new V3()).norm(), p0 = m4pt(inv, n.x * w, n.y * w, n.z * w, new V3()).sub(cl), wl = nl.dot(p0);
     const wp = m4pt(sg.model, cl.x, cl.y, cl.z, new V3()), nWo = m4dir(sg.model, nl.x, nl.y, nl.z, new V3()).norm();
@@ -2425,6 +2438,75 @@ class NPC {
     // grab the stump with the remaining hand
     const arm = /sh|el/.test(info.key), side = arm ? (info.key[0] === 'l' ? 1 : -1) : (Math.random() < 0.5 ? -1 : 1);
     if (!this.severed[side < 0 ? 'lsh' : 'rsh'] && !this.severed[side < 0 ? 'lel' : 'rel'] && !this.broken[side < 0 ? 'armL' : 'armR']) this.clutch = { seg: info.stump, lp: st.lp.clone(), side, t: rand(6, 12) };
+  }
+  // ---------- craters: ragged bites of flesh removed in the shader (no mesh rebuild = no hitch) ----------
+  addCrater(seg, pW, r) {
+    const sg = this.segs[seg], M = this.bodyMat, lp = m4ptInvRigid(sg.model, pW, new V3());
+    const bp = m4pt(this.bindM[seg], lp.x, lp.y, lp.z, new V3()), i = this.crI; this.crI = (i + 1) % 8; M.crN = Math.min(8, M.crN + 1);
+    const info = CUTI[seg], b2 = seg === 1 ? 10 : seg === 10 ? 1 : info ? info.stump : seg;
+    M.cr.set([bp.x, bp.y, bp.z, r], i * 4); M.crB.set([seg, b2, 0, 0], i * 4); M.cut = true;
+  }
+  gouge(seg, pW, r, dir, gb = 1) { // r in metres at scale 1
+    const fx = this.g.fx, r0 = r; r *= this.s; this.addCrater(seg, pW, r);
+    const sg = this.segs[seg], lp = m4ptInvRigid(sg.model, pW, new V3());
+    const radial = new V3(lp.x, seg === 0 || seg === 1 || seg === 10 ? lp.y * 0.3 : 0, lp.z).norm();
+    this.wounds.push({ seg, lp, n: radial, rate: 2.2 * gb, artery: false, t: 0, life: rand(16, 28) }); if (this.wounds.length > 16) this.wounds.shift();
+    this.spouts.push({ seg, lp: lp.clone(), ln: radial.clone(), bleed: 2 + r * 90 * gb, ph: Math.random() * 6 }); if (this.spouts.length > 14) this.spouts.shift();
+    this.bleed += (1.6 + r * 60) * gb; this.pain += 10 + r * 400;
+    this.emitDrip(seg, lp, 1); this.emitDrip(seg, lp.clone().add(v3(rand(-0.02, 0.02), rand(0, 0.02), rand(-0.02, 0.02))), 0.9);
+    this.segs[seg].mat.blood = Math.min(0.3, this.segs[seg].mat.blood + 0.03);
+    if (fx.gore) { fx.blood(pW, dir.clone().scale(1.8).add(v3(0, 0.8, 0)), 6 + (r0 * 250 | 0), 1.1, 1.1, this); fx.mist(pW, dir, 4); if (r0 > 0.018 && Math.random() < 0.6) fx.gibs(pW, 1, dir); }
+  }
+  // ---------- sawing: depth accumulates with effort; reversing the stroke widens the kerf ----------
+  saw(seg, pW, nW, dir, pw, dt, sharp, bump = 0) {
+    const info = CUTI[seg]; if (!info || this.removed || this.severed[info.key] || (seg === 0 && this.headGone)) return null;
+    const fx = this.g.fx, sg = this.segs[seg], lp = m4ptInvRigid(sg.model, pW, new V3());
+    const nl = m4ptInvRigid(sg.model, pW.clone().add(nW), new V3()).sub(lp).norm();
+    let q = null; for (const o of this.saws) if (o.seg === seg && o.lp.dist2(lp) < 0.0036) { q = o; break; }
+    if (!q) { q = { seg, lp: lp.clone(), nl: nl.clone(), depth: 0, strokes: 0, sign: 0, run: 0, idle: 0, emit: 0, axis: dir.clone(), wi: null }; this.saws.push(q); if (this.saws.length > 8) this.saws.shift(); this.sawStroke(q, pW, dir, true); }
+    q.idle = 0; q.lp.lerp(lp, 0.2); q.nl.copy(nl);
+    const sgn = dir.dot(q.axis) >= 0 ? 1 : -1;
+    if (sgn !== q.sign) { if (q.sign && q.run > 0.03) { q.strokes++; this.sawStroke(q, pW, dir, false); } q.run = 0; q.sign = sgn; }
+    q.run += pw * dt;
+    const rad = this.segAxis(seg)[2] / this.s; let res = { waist: 0.3, neck: 0.6 }[info.key] || 1; if (q.depth > 0.38 && q.depth < 0.62) res *= 0.35; // bone
+    const tech = 0.3 + 0.7 * Math.min(1, q.strokes / 3), prog = bump + Math.min(pw, 3.5) * dt * 0.3 * sharp * res * tech / Math.max(rad / 0.05, 0.8);
+    q.depth = Math.min(1, q.depth + prog);
+    const bm = this.bodyMat; if (q.wi != null && bm.wounds2[q.wi * 4 + 3] > 0) { bm.wounds2[q.wi * 4 + 3] = Math.max(bm.wounds2[q.wi * 4 + 3], 0.3 + 1.6 * q.depth); bm.wounds[q.wi * 4 + 3] = Math.max(bm.wounds[q.wi * 4 + 3], (0.01 + 0.03 * q.depth) * this.s); }
+    if (!this.dead) { this.hp -= 40 * prog; this.reg[sg.reg] -= 70 * prog; this.pain += 60 * prog; this.bleed += 5 * prog; if (this.hp <= 0 || this.reg.head <= 0) this.die(seg === 0 ? 'head' : 'body', false); }
+    q.emit -= dt; if (q.emit <= 0 && pw > 0) { q.emit = 0.06; fx.blood(pW, dir.clone().scale(0.7 * q.sign).add(v3(0, 0.5, 0)), 1 + (q.depth * 4 | 0), 0.5, 0.9, this); if (Math.random() < 0.35) AU.flesh(pW, 'slash', 0.5 + 0.5 * q.depth); }
+    const pb = this.P[sg.b]; if (pb && !pb.det && pw > 0) pb.addVel(dir.x * pw * 0.02, 0, dir.z * pw * 0.02); // the body is dragged by the blade
+    if (q.depth >= 0.5 && !q.peeled) { q.peeled = true; this.peel(pW, dir); }
+    if (q.depth >= 0.3 && q.strokes >= 1 && !q.used) for (const o of this.saws) { // two incisions close together: lift the chunk between them out
+      if (o === q || o.used || o.seg !== seg || o.depth < 0.3) continue; const d = o.lp.dist(q.lp);
+      if (d > 0.03 && d < 0.11) { q.used = o.used = true; const mid = q.lp.clone().lerp(o.lp, 0.5); this.gouge(seg, m4pt(sg.model, mid.x, mid.y, mid.z, new V3()), clamp(d * 0.6, 0.025, 0.05) / this.s, dir, 1.4); this.g.feedMsg('Chunk cut out'); AU.dismember(pW); q.depth *= 0.7; o.depth *= 0.7; break; }
+    }
+    if (q.depth >= 1) this.finishSaw(q);
+    return q;
+  }
+  sawStroke(q, pW, dir, first) {
+    this.addWound(q.seg, pW, 'slash', 60 + 120 * q.depth, dir); q.wi = this.lastWound;
+    this.g.fx.blood(pW, dir.clone().scale(2).add(v3(0, 0.8, 0)), 3 + (q.depth * 10 | 0), 0.9, 1, this);
+    if (first || this.dead) return;
+    this.pain += 25; this.alarm = 1; if (this.voiceCd < 0) { AU.voice(this.P[J.HEAD].v3(_t1), 'groan', 1 / this.s); this.voiceCd = rand(0.5, 1.2); }
+    if (q.depth > 0.35 && Math.random() < 0.3) this.fall('shock'); else if (Math.random() < 0.3) this.stagger(0.4);
+  }
+  finishSaw(q) {
+    const info = CUTI[q.seg], sg = this.segs[q.seg]; this.saws = this.saws.filter(o => o !== q); if (this.severed[info.key]) return;
+    const pW = m4pt(sg.model, q.lp.x, q.lp.y, q.lp.z, new V3()), nW = m4dir(sg.model, q.nl.x, q.nl.y, q.nl.z, new V3()).norm();
+    const a = this.P[sg.a], b = this.P[sg.b], ax = new V3(b.x - a.x, b.y - a.y, b.z - a.z).norm(), dir = q.axis.clone(), dd = nW.dot(ax);
+    if (Math.abs(dd) < 0.6) nW.addS(ax, (dd >= 0 ? 1 : -1) * 0.9).norm(); // make sure the plane crosses the limb
+    if (this.cutAt(q.seg, pW, nW, dir) !== 'sever') this.sever(info.key, dir);
+  }
+  stepSaws(dt) { // a deeply sawn part hangs by flesh and tears off if it is yanked or swung hard
+    if (!this.saws.length) return;
+    for (const q of this.saws) {
+      q.idle += dt; const sg = this.segs[q.seg], info = CUTI[q.seg]; if (this.severed[info.key]) { q.dead = true; continue; }
+      if (q.depth >= 0.5) { const a = this.P[sg.a], b = this.P[sg.b]; if (!a || !b) continue;
+        const rv = Math.hypot((b.x - b.px) - (a.x - a.px), (b.y - b.py) - (a.y - a.py), (b.z - b.pz) - (a.z - a.pz)) / DT;
+        if (rv > 8 * (1.05 - q.depth) && rv < 60) { this.g.feedMsg('Torn off'); AU.crack(b.v3(new V3()), 1.2); this.finishSaw(q); q.dead = true; continue; } }
+      if (q.idle > 90) q.dead = true;
+    }
+    this.saws = this.saws.filter(q => !q.dead);
   }
   // ---------- blood on the body ----------
   buildBuckets() { // outer-skin vertices per bone, for keeping trickles on the surface
@@ -2500,7 +2582,7 @@ class NPC {
       const fade = 1 - w.t / w.life, sg = this.segs[w.seg]; if (sg.hidden) continue;
       m4pt(sg.model, w.lp.x, w.lp.y, w.lp.z, _t1); m4dir(sg.model, w.n.x, w.n.y, w.n.z, _t2);
       if (w.artery && !this.dead) {
-        const pulse = Math.max(0, Math.sin(this.g.time * 8.5)); if (Math.random() < dt * 30 * pulse * fade) fx.blood(_t1, _t2.clone().scale(rand(1.5, 3.2) * fade), 2, 0.25, 0.9);
+        const pulse = Math.max(0, Math.sin(this.g.time * 8.5 + 0.7 * Math.sin(this.g.time * 1.3))) * clamp(this.blood / 100, 0.25, 1); if (Math.random() < dt * 30 * pulse * fade) fx.blood(_t1, _t2.clone().scale(rand(1.5, 3.2) * fade), 2, 0.25, 0.9);
       } else if (Math.random() < dt * w.rate * 1.6 * fade * heart) fx.blood(_t1, _t2.clone().scale(rand(0.05, 0.3)), 1, 0.1, rand(0.5, 0.95));
       // blood wells out of the wound and runs down the skin
       if (Math.random() < dt * w.rate * 0.75 * fade * (this.dead ? 0.35 : 1)) this.emitDrip(w.seg, w.lp, rand(0.55, 1));
@@ -2508,7 +2590,7 @@ class NPC {
     }
     for (const c of this.spouts) {
       if (c.bleed <= 0) continue; c.bleed -= dt; const sg = this.segs[c.seg]; if (sg.hidden) continue;
-      const pulse = this.dead ? 0.3 : Math.max(0, Math.sin(this.g.time * 8.5 + c.ph)), k = Math.min(1, c.bleed / 4);
+      const bf = clamp(this.blood / 100, 0.2, 1), pulse = this.dead ? 0.3 * bf : Math.max(0, Math.sin(this.g.time * (6 + 3 * bf) + 0.7 * Math.sin(this.g.time * 1.3 + c.ph) + c.ph)) * bf, k = Math.min(1, c.bleed / 4);
       m4pt(sg.model, c.lp.x, c.lp.y, c.lp.z, _t1); m4dir(sg.model, c.ln.x, c.ln.y, c.ln.z, _t2);
       if (Math.random() < dt * 40 * pulse * k) {
         fx.blood(_t1, _t2.clone().scale(rand(0.8, 3.0) * Math.min(1, c.bleed / 5) * (this.dead ? 0.4 : 1)), 2, 0.3, 1.0);
@@ -2670,12 +2752,12 @@ class FX {
   // ---------- particles ----------
   add(kind, pos, vel, life, size, col, opts) {
     if (this.density < 1 && kind !== 'blood' && kind !== 'flash' && Math.random() > this.density) return null;
-    if (this.parts.length >= this.maxParts) this.parts.splice(0, 200);
+    if (this.parts.length >= (this.g.vr && this.g.vr.active ? 2600 : this.maxParts)) this.parts.splice(0, 200);
     const p = { k: kind, x: pos.x, y: pos.y, z: pos.z, vx: vel.x, vy: vel.y, vz: vel.z, life, max: life, size, c: col, add: kind === 'spark' || kind === 'fire' || kind === 'flash', grow: 0, owner: null, age: 0 };
     if (opts) Object.assign(p, opts); this.parts.push(p); return p;
   }
   blood(pos, vel, n, spread, sizeMul = 1, owner) {
-    n = Math.ceil(n * (this.gore ? 1 : 0.35) * Math.min(1.4, this.density));
+    n = Math.ceil(n * (this.gore ? 1 : 0.35) * Math.min(1.4, this.density) * (this.g.vr && this.g.vr.active ? 0.6 : 1));
     for (let i = 0; i < n; i++) {
       const v = { x: vel.x + rand(-spread, spread), y: vel.y + rand(-spread, spread) * 0.8, z: vel.z + rand(-spread, spread) };
       const sz = rand(0.006, 0.016) * sizeMul * (Math.random() < 0.12 ? 1.6 : 1);
@@ -2704,14 +2786,14 @@ class FX {
     for (let i = 0; i < n; i++) this.spawnDebris('gib', pos, v3((dir ? dir.x * 2 : 0) + rand(-2.5, 2.5), rand(1, 4), (dir ? dir.z * 2 : 0) + rand(-2.5, 2.5)), this.debrisMat.gib, { bloody: true, r: 0.03, snd: 'splat' });
   }
   spawnDebris(mesh, pos, vel, mat, o = {}) {
-    if (this.debris.length > 90) { const old = this.debris.shift(); if (old.own) this.R.freeMesh(old.mesh); }
+    if (this.debris.length > (this.g.vr && this.g.vr.active ? 55 : 90)) { const old = this.debris.shift(); if (old.own) this.R.freeMesh(old.mesh); }
     const d = { mesh: this.meshes[mesh] || mesh, mat, p: pos.clone(), v: vel.clone(), rot: [rand(0, 6), rand(0, 6), rand(0, 6)], av: [rand(-15, 15), rand(-15, 15), rand(-15, 15)], life: o.life || 25, r: o.r || 0.012, snd: o.snd, sndCd: 0, bounces: 0, sleep: false, model: m4(), bloody: o.bloody, shotgun: o.shotgun, own: o.own };
     if (o.R0) { d.R0 = m4(); d.R0.set(o.R0); d.R0[12] = d.R0[13] = d.R0[14] = 0; }
     this.debris.push(d); return d;
   }
   // ---------- decals ----------
   decal(pos, n, size, cell, col, spec = 0, opts = {}) {
-    while (this.decals.length >= this.maxDecals) { const i = this.decals.findIndex(d => d.kind !== 'puddle'); this.decals.splice(i >= 0 ? i : 0, 1); }
+    while (this.decals.length >= this.maxDecals) { let bi = -1, bw = 1e9; const L = Math.min(this.decals.length, 80); for (let k = 0; k < L; k++) { const q = this.decals[k]; if (q.kind === 'puddle') continue; const a = q.w * q.h; if (a < bw) { bw = a; bi = k; } } this.decals.splice(bi >= 0 ? bi : 0, 1); } // oldest + smallest go first; big stains stay
     const nn = n.clone().norm(); const t = new V3(); if (Math.abs(nn.y) > 0.9) t.set(1, 0, 0); else t.set(0, 1, 0);
     t.crossV(nn, t).norm(); const b = new V3().crossV(nn, t).norm();
     const a = opts.angle ?? rand(0, TAU), ca = Math.cos(a), sa = Math.sin(a);
@@ -2723,7 +2805,12 @@ class FX {
   splat(pos, n, size, dir) {
     const c = BLOOD_COL; const col = [c[0] * rand(0.75, 1.1), c[1], c[2], rand(0.85, 1)];
     if (dir && size > 0.15 && Math.random() < 0.6) { const ang = Math.atan2(dir.dot(this._b(n)), dir.dot(this._t(n))); return this.decal(pos, n, size, CELL.spray, col, 0.7, { angle: ang, aspect: 1.6 }); }
-    return this.decal(pos, n, size, pick(CELL.splat), col, 0.75);
+    const dd = this.decal(pos, n, size, pick(CELL.splat), col, 0.75, { aspect: rand(0.75, 1.3) });
+    if (size > 0.1 && this.gore && this.decals.length < this.maxDecals * 0.9) { // satellite droplets, thrown along the impact direction
+      const t = this._t(n), b = this._b(n), a0 = dir ? Math.atan2(dir.dot(b), dir.dot(t)) : rand(0, TAU);
+      for (let k = randi(2, 4); k > 0; k--) { const a = a0 + rand(-0.7, 0.7), r = size * rand(0.5, 1.2); this.decal(pos.clone().addS(t, Math.cos(a) * r).addS(b, Math.sin(a) * r), n, size * rand(0.07, 0.2), pick(CELL.splat), col, 0.75); }
+    }
+    return dd;
   }
   _t(n) { const t = new V3(); if (Math.abs(n.y) > 0.9) t.set(1, 0, 0); else t.set(0, 1, 0); return t.crossV(n, t).norm(); }
   _b(n) { return new V3().crossV(n, this._t(n)).norm(); }
@@ -2732,7 +2819,7 @@ class FX {
     let best = null, bd = 0.3;
     for (const p of this.puddles) { const d = Math.hypot(p.c.x - x, p.c.z - z); if (d < bd && Math.abs(p.c.y - y) < 0.15) { bd = d; best = p; } }
     if (best) { best.area = Math.min(best.area + amt * 0.11, 2.6); const s = Math.sqrt(best.area) * 1.2; best.th = s; best.tw = s * best.asp; return; }
-    if (this.puddles.length > 60) { const old = this.puddles.shift(); const i = this.decals.indexOf(old); if (i >= 0) this.decals.splice(i, 1); }
+    if (this.puddles.length > 120) { const old = this.puddles.shift(); const i = this.decals.indexOf(old); if (i >= 0) this.decals.splice(i, 1); }
     const d = this.decal(v3(x, y, z), v3(0, 1, 0), 0.05, CELL.puddle, [BLOOD_COL[0] * 0.75, BLOOD_COL[1], BLOOD_COL[2], 0.97], 1.0, { kind: 'puddle', aspect: rand(0.8, 1.25) });
     d.area = 0.003; d.asp = d.w / d.h; d.w = d.h = 0.02; this.puddles.push(d);
   }
@@ -2750,6 +2837,15 @@ class FX {
     this.decal(pos, n, mat === 'metal' ? 0.06 : 0.1, cell, [1, 1, 1, 1], mat === 'metal' ? 0.5 : 0.1);
   }
   clear() { this.decals.length = 0; this.puddles.length = 0; this.decalDirty = true; for (const d of this.debris) if (d.bloody) d.life = 0; }
+  dryDecals(h) { // blood slowly darkens and loses its wet gloss, but never vanishes
+    let ch = false;
+    for (const d of this.decals) {
+      d.age += h; if (d.nb) continue;
+      if (!d.c0) { if (!(d.col[0] > d.col[2] * 2.5 && d.spec >= 0.3)) { d.nb = 1; continue; } d.c0 = d.col.slice(); d.s0 = d.spec; d.k = 0; }
+      const k = Math.min(1, d.age / 300); if (k - d.k < 0.04) continue; d.k = k; d.col[0] = d.c0[0] * (1 - 0.5 * k); d.spec = d.s0 * (1 - 0.65 * k); ch = true;
+    }
+    if (ch) this.decalDirty = true;
+  }
   // ---------- screen blood ----------
   screenBlood(n) {
     const c = this.bc, x = this.bx; if (c.width !== (innerWidth >> 2)) { c.width = innerWidth >> 2; c.height = innerHeight >> 2; }
@@ -2790,7 +2886,7 @@ class FX {
           else { p.x = ox; p.y = Math.max(oy, 0.01); p.z = oz; p.vx *= 0.3; p.vy = 0; p.vz *= 0.3; }
         }
         // blood hitting bodies
-        if (p.k === 'blood' && p.age > 0.08 && (i & 1) === (g.frame & 1)) {
+        if (p.k === 'blood' && p.age > 0.08 && (i & 3) === (g.frame & 3)) {
           for (const n of npcs) {
             if (n.center.dist2(_fp.set(p.x, p.y, p.z)) > 1.3) continue; if (p.owner === n && p.age < 0.4) continue;
             const cs = n.capsules(); let hitSeg = -1;
@@ -2833,13 +2929,14 @@ class FX {
     this.updateStrands(dt);
     for (const d of this.runs) { // runs creep down the wall, slowing as they thin out; reaching the floor they pool
       if (d.done) continue;
-      const left = 1 - d.w / d.tw; d.w += (0.012 + 0.16 * left * left) * dt * d.spd; this.decalDirty = true;
+      const stp = (0.008 + 0.07 * (d.vol || 0.6)) * d.spd * (0.55 + 0.45 * Math.sin(d.w * 37 + d.spd * 11)) * dt; d.w += stp; d.vol = (d.vol || 0.6) - stp * 1.1; this.decalDirty = true; // flow is driven by remaining volume: stop-and-go, thinning out
       const bottom = d.top.y - d.w * 0.95;
       if (bottom < d.floorY + 0.01) { d.done = true; this.puddle(d.top.x + d.n.x * 0.06, d.floorY, d.top.z + d.n.z * 0.06, 0.25 * d.h / 0.05); }
-      else if (d.w >= d.tw) { d.done = true; if (Math.random() < 0.5) this.add('blood', v3(d.top.x + d.n.x * 0.012, bottom, d.top.z + d.n.z * 0.012), { x: d.n.x * 0.1, y: -0.2, z: d.n.z * 0.1 }, 3, 0.012, [...BLOOD_COL, 1]); }
+      else if (d.w >= d.tw || d.vol <= 0) { d.done = true; if (Math.random() < 0.5) this.add('blood', v3(d.top.x + d.n.x * 0.012, bottom, d.top.z + d.n.z * 0.012), { x: d.n.x * 0.1, y: -0.2, z: d.n.z * 0.1 }, 3, 0.012, [...BLOOD_COL, 1]); }
       d.c.copy(d.top).addS(d.t, d.w * 0.5);
     }
     // decals growth
+    this.dryT = (this.dryT || 0) + dt; if (this.dryT > 4) { this.dryDecals(this.dryT); this.dryT = 0; }
     this.growT += dt; if (this.growT > 0.1) { for (const d of this.puddles) { if (Math.abs(d.h - d.th) > 0.002) { d.h = damp(d.h, d.th, 0.8, this.growT); d.w = d.h * d.asp; this.decalDirty = true; } } this.growT = 0; }
     // screen blood fade
     if (this.screenAmt > 0) { this.screenAmt -= dt * 0.4; const x = this.bx; x.globalCompositeOperation = 'destination-out'; x.fillStyle = `rgba(0,0,0,${dt * 0.9})`; x.fillRect(0, 0, this.bc.width, this.bc.height); x.globalCompositeOperation = 'source-over'; if (this.screenAmt <= 0) x.clearRect(0, 0, this.bc.width, this.bc.height); }
@@ -2847,7 +2944,7 @@ class FX {
   run(p, n, sz) { // blood running down a wall
     if (this.runs.length > 160) { const old = this.runs.shift(); const i = this.decals.indexOf(old); if (i >= 0) this.decals.splice(i, 1); }
     const d = this.decal(p.clone().addS(v3(0, -1, 0), 0.01), n, 0.04, CELL.run, [BLOOD_COL[0] * 0.85, BLOOD_COL[1], BLOOD_COL[2], 0.95], 0.9, { kind: 'run' });
-    d.t.set(0, -1, 0); d.b.crossV(d.n, d.t).norm(); d.h = d.th = clamp(sz * 0.3, 0.022, 0.065); d.w = 0.02; d.tw = rand(0.45, 1.4) * clamp(sz * 5, 0.6, 2.4); d.top = d.c.clone(); d.spd = rand(0.6, 1.4);
+    d.t.set(0, -1, 0); d.b.crossV(d.n, d.t).norm(); d.h = d.th = clamp(sz * 0.3, 0.022, 0.065); d.w = 0.02; d.tw = rand(0.45, 1.4) * clamp(sz * 5, 0.6, 2.4); d.top = d.c.clone(); d.spd = rand(0.6, 1.4); d.vol = clamp(sz * 12, 0.35, 2.2) * rand(0.8, 1.25);
     const fh = this.g.world.raycast(d.top.clone().addS(n, 0.05), v3(0, -1, 0), 6, true); d.floorY = fh ? fh.p.y : 0; this.runs.push(d);
   }
   addStrands(n, pa, pb, pos, count, thick, col) {
@@ -2912,7 +3009,7 @@ class FX {
   renderFX(R, camRight, camUp) {
     const gl = R.gl;
     // decals
-    if (this.decalDirty) {
+    if (this.decalDirty && performance.now() - (this._lb || 0) > (this.g.vr && this.g.vr.active ? 100 : 45)) { this._lb = performance.now();
       const D = this.decalBuf.data; let o = 0;
       const SX = [-1, 1, 1, -1, 1, -1], SY = [-1, -1, 1, -1, 1, 1];
       for (const d of this.decals) {
@@ -2944,7 +3041,7 @@ class FX {
       const liq = p.k === 'blood' ? 1 : 0;
       buf[o++] = p.x; buf[o++] = p.y; buf[o++] = p.z; buf[o++] = p.c[0]; buf[o++] = p.c[1]; buf[o++] = p.c[2]; buf[o++] = a + liq; buf[o++] = soft ? -p.size : p.size;
       // motion streak
-      if ((p.k === 'blood' || p.k === 'spark') && (p.vx * p.vx + p.vy * p.vy + p.vz * p.vz) > 2.5) for (let s = 1; s <= 5; s++) { buf[o++] = p.x - p.vx * 0.005 * s; buf[o++] = p.y - p.vy * 0.005 * s; buf[o++] = p.z - p.vz * 0.005 * s; buf[o++] = p.c[0]; buf[o++] = p.c[1]; buf[o++] = p.c[2]; buf[o++] = a * 0.9 + liq; buf[o++] = p.size * (1 - s * 0.13); }
+      if ((p.k === 'blood' || p.k === 'spark') && (p.vx * p.vx + p.vy * p.vy + p.vz * p.vz) > 2.5) for (let s = 1; s <= (this.g.vr && this.g.vr.active ? 2 : 4); s++) { buf[o++] = p.x - p.vx * 0.005 * s; buf[o++] = p.y - p.vy * 0.005 * s; buf[o++] = p.z - p.vz * 0.005 * s; buf[o++] = p.c[0]; buf[o++] = p.c[1]; buf[o++] = p.c[2]; buf[o++] = a * 0.9 + liq; buf[o++] = p.size * (1 - s * 0.13); }
       if (p.add) nb = o; else na = o;
     }
     const pr = R.pPart; gl.useProgram(pr.p); gl.uniformMatrix4fv(pr.u.uVP, false, R.vp); gl.uniform1f(pr.u.uPx, R.vpH * R.proj[5] / 2);
@@ -3426,7 +3523,7 @@ class Arms {
   canAct() { return !this.next && this.raise > 0.85 && !this.g.player.dead; }
   // ---------------- update ----------------
   update(dt, inp) {
-    const g = this.g, pl = g.player, w = this.cur, A = this.ammo[w.id];
+    const g = this.g, pl = g.player, w = this.cur, A = this.ammo[w.id]; this.inp = inp;
     this.cool -= dt;
     // switching
     if (this.next) { this.switchT += dt; this.raise = Math.max(0, this.raise - dt * 6); if (this.raise <= 0) { this.cur = this.next; this.next = null; AU.mech(pl.eye, 'equip'); this.M.node.mat.blood *= 1; } }
@@ -3566,6 +3663,20 @@ class Arms {
   }
   updateMelee(dt) {
     const at = this.atk, a = at.a, w = at.w, g = this.g, pl = g.player;
+    if (at.sawing) {
+      const S = at.sawing, inp = this.inp || {}, npc = S.npc, mx = inp.smx || 0, my = inp.smy || 0, mv = Math.hypot(mx, my * 0.6);
+      S.idle = mv > 1 ? 0 : S.idle + dt;
+      if (!inp.fire || npc.removed || S.idle > 0.8 || pl.eye.dist(npc.center) > 3) { at.sawing = null; at.t = Math.max(at.t, a.act[1]); }
+      else if (mv > 1) {
+        const sg = npc.segs[S.seg], p = m4pt(sg.model, S.lp.x, S.lp.y, S.lp.z, new V3()), pts = this.samplePts(w, this.tmpPts), bl = new V3().subV(pts[w.samples.length - 1], pts[0]).norm();
+        const hor = Math.abs(mx) >= Math.abs(my * 0.6), dir = (hor ? pl.right.clone().scale(mx >= 0 ? 1 : -1) : pl.up.clone().scale(my > 0 ? -1 : 1)).norm();
+        const nq = new V3().crossV(bl, dir); if (nq.len2() < 1e-6) nq.crossV(pl.fwd, dir); nq.norm();
+        const sw = npc.saw(S.seg, p, nq, dir, clamp(mv / Math.max(dt, 1e-3) * 0.0012, 0, 3.5), dt, clamp(w.sever * 1.4, 0.35, 1.5));
+        if (!sw) { at.sawing = null; at.t = Math.max(at.t, a.act[1]); }
+        else { pl.shake = Math.max(pl.shake, 0.06 + 0.12 * sw.depth); this.M.node.mat.blood = Math.min(0.75, this.M.node.mat.blood + dt * 0.15); this.handMat.blood = Math.min(0.4, this.handMat.blood + dt * 0.03); }
+      }
+      if (at.sawing) return;
+    }
     if (at.stuck) {
       const s = at.stuck; s.t -= dt;
       const tip = this.samplePts(w, this.tmpPts)[w.samples.length - 1];
@@ -3627,7 +3738,7 @@ class Arms {
       const kind = blunt ? 'blunt' : stab ? 'stab' : 'slash';
       const dmg = (at.alt ? w.alt : w.dmg) * (stab ? 1 : sf) * rand(0.9, 1.1);
       const dir = stab ? pl.fwd.clone() : sweepDir.clone().lerp(pl.fwd, 0.3).norm();
-      const sev = blunt ? 0 : w.sever * sf * (a.heavy ? 1.35 : 1) * (stab ? 0.15 : 1);
+      const sev = 0;
       const imp = w.imp * (stab ? 0.6 : sf) * (a.heavy ? 1.4 : 1);
       const blade = new V3().subV(pts[w.samples.length - 1], pts[0]); if (blade.len2() > 1e-8) blade.norm();
       const res = npc.hit(best.seg, best.p, dir, dmg, imp, kind, { sever: sev, blade: stab ? null : blade, headPop: w.crush && best.seg === 0 && (a.heavy || sf > 1.1) && Math.random() < 0.7 });
@@ -3639,6 +3750,11 @@ class Arms {
       this.M.node.mat.blood = Math.min(0.75, this.M.node.mat.blood + (blunt ? 0.08 : 0.16)); this.handMat.blood = Math.min(0.4, this.handMat.blood + 0.04);
       g.ui.hitmark(res && res.killed); g.hitstop(blunt || a.heavy ? 0.07 : 0.04);
       pl.shake = Math.max(pl.shake, blunt ? 0.3 : 0.15);
+      if (!blunt && !stab && w.sever > 0) { // the blade bites in and lodges: hold fire and drag the mouse to saw
+        const nq = new V3().crossV(blade, dir);
+        if (nq.len2() > 1e-6) { const sw = npc.saw(best.seg, best.p, nq.norm(), dir, 2.5, 0.03, clamp(w.sever * 1.4, 0.35, 1.5), 0.1 * sf * (a.heavy ? 1.6 : 1));
+          if (sw) { at.sawing = { npc, seg: best.seg, lp: m4ptInvRigid(npc.segs[best.seg].model, best.p, new V3()), idle: 0 }; if (!g._sawHint) { g._sawHint = 1; g.feedMsg('Hold fire + drag mouse to saw'); } return; } }
+      }
       if (stab && !npc.headGone) { // stick
         let pi = 0, pd = 1e9; for (let i = 0; i < NB; i++) { const p = npc.P[i]; if (p.det && i !== npc.segs[best.seg].a) continue; const d = Math.hypot(p.x - best.p.x, p.y - best.p.y, p.z - best.p.z); if (d < pd) { pd = d; pi = i; } }
         at.stuck = { npc, pi, t: 0.3 }; return;
@@ -4011,10 +4127,14 @@ class Game {
           if (w.pellets) {
             const sg = n.segs[h.seg]; const key = n.id + ':' + h.seg;
             if (h.seg === 0) { const c = (headCounts.get(n) || 0) + 1; headCounts.set(n, c); if (c >= 4 && h.t < 5 && Math.random() < w.headPop) headPop = true; }
-            else if (sg.cut && h.t < 5) { const c = (limbCounts.get(key) || 0) + 1; limbCounts.set(key, c); sever = c >= 3 ? 0.55 : 0; }
+            else if (sg.cut && h.t < 5) { const c = (limbCounts.get(key) || 0) + 1; limbCounts.set(key, c); sever = c >= 4 ? 0.4 : 0; }
             else sever = 0;
           } else if (h.seg === 0 && w.headPop && Math.random() < w.headPop * (close ? 1 : 0.6)) headPop = true;
-          const res = n.hit(h.seg, p, d, w.dmg * dmgMul * rand(0.92, 1.08), w.imp * dmgMul, 'bullet', { sever, headPop, ap: w.ap });
+          let gouge = 0, gb = 1;
+          if (w.pellets) { if (h.t < 10) { gouge = lerp(0.034, 0.013, h.t / 10) * rand(0.8, 1.2); gb = 1.6; } } // each pellet bites out flesh and bleeds hard
+          else if (w.dmg >= 70 || (h.seg === 0 && w.dmg >= 40)) gouge = clamp(w.dmg / 4500, 0.012, 0.03);
+          const res = n.hit(h.seg, p, d, w.dmg * dmgMul * rand(0.92, 1.08), w.imp * dmgMul, 'bullet', { sever, headPop, ap: w.ap, gouge, gb });
+          if (res && !res.armor && !w.pellets && w.dmg >= 70 && h.seg <= 1) n.gouge(h.seg, p.clone().addS(d, h.seg === 0 ? 0.15 : 0.26), clamp(w.dmg / 2600, 0.018, 0.045), d, 1.2); // ragged exit wound
           if (!res || !res.armor) {
             fx.mist(p, d.clone().scale(-0.6), 6); fx.blood(p, d.clone().scale(-0.8).add(v3(0, 0.6, 0)), 3, 0.6, 0.8, n);
             if (this.fx.gore) { // exit wound spray
@@ -4135,6 +4255,7 @@ class Game {
   timeScale(dt) { let ts = this.slowmo ? 0.3 : 1; if (this.hitT > 0) { this.hitT -= dt; ts *= 0.2; } return dt * ts; }
   step(dt) {
     const inp = this.input.poll();
+    { const aw = this.arms.atk; if (aw && aw.sawing) { inp.smx = inp.mx; inp.smy = inp.my; inp.mx = inp.my = 0; } } // view locks while sawing
     if (this.paused) { this.input.endFrame(); return; }
     const sdt = this.timeScale(dt); this.time += sdt; this.frame++;
     this.player.update(sdt, inp);
@@ -4866,6 +4987,7 @@ class VR {
     }
     // wall scrape feedback
     if (held && it.blocked && speed > 2.5 && it.sndCd <= 0) { it.sndCd = 0.15; const p = tip; if (blade) { AU.clang(p, 0.5); g.fx.sparks(p, v3(0, 1, 0), 6); } else AU.thud(p, 0.5); this.haptic(it.hand, 0.6, 40); }
+    if (blade && held && speed > 0.3) { const sw = this.sawContact(it, pts, prev, ti, speed, dt); if (sw && speed < 2.8) return; }
     if (speed < minSp) return;
     const sweep = _vd.subV(tip, ptip).norm().clone();
     for (const npc of g.npcs) {
@@ -4885,8 +5007,9 @@ class VR {
       const base = d.type === 'melee' ? (stab ? d.alt : d.dmg) : 12;
       const dmg = base * sf * (held ? 1 : 0.9);
       const imp = (d.imp || 3) * sf * (held ? 1 : 0.7);
-      const sev = blade ? d.sever * sf * (stab ? 0.15 : 1) : 0;
+      const sev = 0;
       const res = npc.hit(best.seg, best.p, sweep, dmg, imp, kind, { sever: sev, blade: stab ? null : axis, headPop: d.crush && best.seg === 0 && sf > 1.05 && Math.random() < 0.6 });
+      if (kind === 'slash' && held) { const nq = new V3().crossV(axis, sweep); if (nq.len2() > 1e-6) npc.saw(best.seg, best.p, nq.norm(), sweep, 0, 0, 1, 0.08 * sf); }
       if (kind === 'blunt') { g.fx.blood(best.p, sweep.clone().scale(2).add(v3(0, 1, 0)), 6, 0.9, 1); AU.flesh(best.p, 'blunt', clamp(sf, 0.4, 1.3)); if (dmg > 35 || best.seg === 0) AU.crack(best.p, 0.8); }
       else { g.fx.blood(best.p, sweep.clone().scale(stab ? 1.2 : 3.4).add(v3(0, 0.7, 0)), stab ? 10 : 20, stab ? 0.6 : 1.1, 1.1, npc); g.fx.mist(best.p, sweep, 8); AU.flesh(best.p, kind, 1); }
       it.node.mat.blood = Math.min(0.75, it.node.mat.blood + (kind === 'blunt' ? 0.08 : 0.16));
@@ -4899,6 +5022,21 @@ class VR {
     }
     // props
     if (speed > minSp) for (const pr of g.props) { const last = it.hits.get(pr); if (last && now - last < 0.3) continue; for (let i = 0; i < n; i++) if (pr.contains(pts[i], 0.02)) { it.hits.set(pr, now); const k = clamp(speed / 5, 0.3, 1.5) * (d.imp || 3) * 0.7; pr.impulse(pts[i], sweep.x * k, sweep.y * k + 0.5, sweep.z * k); if (pr.D.mat === 'metal') { AU.clang(pts[i], 1, true); g.fx.sparks(pts[i], sweep.clone().scale(-1), 8); } else AU.wood(pts[i], 1); g.damageProp(pr, (d.dmg || 10) * 0.5, pts[i]); if (held) this.haptic(it.hand, 0.5, 40); break; } }
+  }
+  sawContact(it, pts, prev, ti, speed, dt) { // slow blade-on-body contact = sawing (resists; progress needs back-and-forth strokes)
+    const g = this.g, n = pts.n, tip = pts[ti], sweep = _vd.subV(tip, prev[ti]).norm().clone(), axis = m4dir(it.model, 0, 1, 0, new V3());
+    if (Math.abs(sweep.dot(axis)) > 0.72) return false; // pushing along the blade is a stab
+    for (const npc of g.npcs) {
+      if (npc.removed || npc.center.dist2(tip) > 4) continue;
+      const cs = npc.capsules(); let best = null, bd = 1e9;
+      for (let k = 0; k < cs.n; k++) { const c = cs[k]; for (let i = 0; i < n; i++) { const d2 = segSegDist2(prev[i], pts[i], c.a, c.b, _segRes), rr = c.r + 0.01; if (d2 < rr * rr && d2 < bd) { bd = d2; best = { seg: c.seg, p: prev[i].clone().lerp(pts[i], _segRes.s) }; } } }
+      if (!best) continue;
+      const nW = new V3().crossV(axis, sweep); if (nW.len2() < 1e-6) continue;
+      const sw = npc.saw(best.seg, best.p, nW.norm(), sweep, speed, dt, clamp((it.def.sever || 0.5) * 1.4, 0.35, 1.5)); if (!sw) continue;
+      this.haptic(it.hand, 0.25 + 0.5 * sw.depth, 30); if (it.second) this.haptic(it.second, 0.2, 30);
+      it.node.mat.blood = Math.min(0.75, it.node.mat.blood + dt * 0.2); return true;
+    }
+    return false;
   }
   fistHit(h) {
     const g = this.g, sp = h.vel.len(); if (sp < 2.3) return; const p = h.pos, now = g.time;
